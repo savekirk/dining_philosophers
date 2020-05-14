@@ -1,27 +1,24 @@
-use actix::{Actor, Arbiter, SyncArbiter, System};
-use dinning_philosophers::{Chopstick, Philosopher, PhilosopherMessage, Take};
-fn main() {
-    let system = System::new("Philosophers");
+use actix::{Actor, System};
+use dinning_philosophers::{Action, Chopstick, Philosopher};
+use std::sync::Arc;
 
-    let chopsticks = SyncArbiter::start(5, || Chopstick {});
+fn main() -> std::io::Result<()> {
+    System::run(|| {
+        let mut chopsticks = Vec::with_capacity(5);
+        for _ in 0..5 {
+            chopsticks.push(Arc::new(Chopstick::new().start()));
+        }
 
-    let zeno = Philosopher::new("Zeno").start();
-    let seneca = Philosopher::new("Seneca").start();
-    let cato = Philosopher::new("Cato, Marcus Porcius").start();
-    let epictetus = Philosopher::new("Epictetus").start();
-    let marcus = Philosopher::new("Marcus Aurelius").start();
-
-    zeno.do_send(PhilosopherMessage::Eat);
-    marcus.do_send(PhilosopherMessage::Think);
-    seneca.do_send(PhilosopherMessage::Eat);
-    cato.do_send(PhilosopherMessage::Think);
-    epictetus.do_send(PhilosopherMessage::Think);
-    chopsticks.do_send(Take::new(zeno.clone()));
-    chopsticks.do_send(Take::new(zeno.clone()));
-    system.run();
-
-    // match res {
-    //     Ok(res) => println!("Professor is {}", res),
-    //     _ => println!("Failed to get current state")
-    // }
+        let philosophers = vec!["Zeno", "Seneca", "Cato", "Epictetus", "Aurelius"];
+        for i in 0..5 {
+            let philosopher = Philosopher::new(
+                philosophers[i],
+                chopsticks[i].clone(),
+                chopsticks[i % 5].clone(),
+            )
+            .start();
+            philosopher.do_send(Action::Think);
+        }
+        System::current().stop();
+    })
 }
