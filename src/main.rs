@@ -16,12 +16,11 @@ fn main() -> std::io::Result<()> {
             let philosopher = Philosopher::new(
                 philosophers[i],
                 chopsticks[i].clone(),
-                chopsticks[i % 5].clone(),
+                chopsticks[(i + 1) % 5].clone(),
             )
             .start();
             philosopher.do_send(Action::Think);
         }
-
-        System::current().stop();
+        //This will run continuosly unless Ctrl + c is hit or use System::current().stop() to stop
     })
 }
