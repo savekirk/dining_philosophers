@@ -1,28 +1,33 @@
 use actix::prelude::*;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 type Address = Arc<Addr<Chopstick>>;
-#[derive(Debug)]
+
 pub struct Philosopher {
     pub name: String,
-    pub state: String,
+    pub state: PhilosopherState,
     pub left: Address,
     pub right: Address,
-    left_taken: bool,
-    right_taken: bool,
+}
+
+#[derive(Debug)]
+pub enum PhilosopherState {
+    Waiting,
+    Eating,
+    Thinking,
+    Hungry,
+    WaitingForOtherChopstick,
+    FirstChopStickDenied,
 }
 
 impl Philosopher {
     pub fn new(name: &str, left: Address, right: Address) -> Self {
         Philosopher {
             name: name.to_string(),
-            state: String::from("Thinking"),
-            left: left,
-            right: right,
-            left_taken: false,
-            right_taken: false,
+            state: PhilosopherState::Waiting,
+            left,
+            right,
         }
     }
 }
@@ -34,7 +39,7 @@ impl Actor for Philosopher {
 #[rtype(result = "()")]
 enum ChopstickState {
     ChopstickAvailable(ChopstickPosition),
-    ChopstickUnAvailable,
+    ChopstickUnAvailable(ChopstickPosition),
 }
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -45,36 +50,36 @@ pub enum Action {
 
 impl Handler<Action> for Philosopher {
     type Result = ();
-    fn handle(&mut self, msg: Action, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: Action, ctx: &mut Context<Self>) -> Self::Result {
         match msg {
-            Action::Eat => {
-                if self.right_taken && self.left_taken {
-                    println!("{} is eating", self.name);
-                    thread::sleep(Duration::from_secs(2));
-                    println!("{} has finished eating", self.name);
-                    self.left
-                        .clone()
-                        .do_send(ChopstickAction::Put(ctx.address()));
-                    self.right
-                        .clone()
-                        .do_send(ChopstickAction::Put(ctx.address()));
-                    self.left_taken = false;
-                    self.right_taken = false;
-                    ctx.address().do_send(Action::Think);
+            Action::Eat => match self.state {
+                PhilosopherState::Thinking => {
+                    chopstick_command(
+                        self.left.clone(),
+                        ChopstickAction::Take(ctx.address(), ChopstickPosition::Left),
+                    );
+                    chopstick_command(
+                        self.right.clone(),
+                        ChopstickAction::Take(ctx.address(), ChopstickPosition::Right),
+                    );
+                    self.state = PhilosopherState::Hungry;
                 }
-            }
+                _ => {}
+            },
             Action::Think => {
-                println!("{} is thinking", self.name);
-                thread::sleep(Duration::from_secs(5));
-                println!("{} has finished thinking", self.name);
-                self.left.clone().do_send(ChopstickAction::Take(
-                    ctx.address(),
-                    ChopstickPosition::Left,
-                ));
-                self.left.clone().do_send(ChopstickAction::Take(
-                    ctx.address(),
-                    ChopstickPosition::Right,
-                ))
+                match self.state {
+                    PhilosopherState::Waiting => {
+                        println!("{} is thinking", self.name);
+                    }
+                    PhilosopherState::Eating => {
+                        println!("{} dropped both chopsticks and started thinking", self.name);
+                        chopstick_command(self.left.clone(), ChopstickAction::Put);
+                        chopstick_command(self.right.clone(), ChopstickAction::Put);
+                    }
+                    _ => {}
+                };
+                self.state = PhilosopherState::Thinking;
+                ctx.notify_later(Action::Eat, Duration::from_secs(5));
             }
         }
     }
@@ -84,33 +89,50 @@ impl Handler<ChopstickState> for Philosopher {
     type Result = ();
 
     fn handle(&mut self, msg: ChopstickState, ctx: &mut Self::Context) -> Self::Result {
-        match msg {
-            ChopstickState::ChopstickAvailable(position) => {
-                println!("{:} got {:?} chopstick", self.name, position);
-                match position {
-                    ChopstickPosition::Left => self.left_taken = true,
-                    ChopstickPosition::Right => self.right_taken = true,
+        match self.state {
+            PhilosopherState::Hungry => match msg {
+                ChopstickState::ChopstickAvailable(_) => {
+                    self.state = PhilosopherState::WaitingForOtherChopstick
                 }
-                if self.left_taken && self.right_taken {
-                    ctx.address().do_send(Action::Eat);
+                ChopstickState::ChopstickUnAvailable(_) => {
+                    self.state = PhilosopherState::FirstChopStickDenied
                 }
+            },
+            PhilosopherState::WaitingForOtherChopstick => match msg {
+                ChopstickState::ChopstickAvailable(_) => {
+                    println!("{} got both chopsticks and start to eat", self.name);
+                    self.state = PhilosopherState::Eating;
+                    start_eating(ctx, Duration::from_secs(2));
+                }
+                ChopstickState::ChopstickUnAvailable(position) => {
+                    println!(
+                        "{} did not get {:#?} chopsticks and cannot eat",
+                        self.name, position
+                    );
+                    if position == ChopstickPosition::Left {
+                        chopstick_command(self.left.clone(), ChopstickAction::Put);
+                    } else {
+                        chopstick_command(self.right.clone(), ChopstickAction::Put);
+                    }
+                    self.state = PhilosopherState::Thinking;
+                    start_thinking(ctx, Duration::from_millis(10));
+                }
+            },
+            PhilosopherState::FirstChopStickDenied => {
+                match msg {
+                    ChopstickState::ChopstickAvailable(position) => {
+                        if position == ChopstickPosition::Left {
+                            chopstick_command(self.left.clone(), ChopstickAction::Put);
+                        } else {
+                            chopstick_command(self.right.clone(), ChopstickAction::Put);
+                        }
+                    }
+                    ChopstickState::ChopstickUnAvailable(_) => {}
+                }
+                self.state = PhilosopherState::Thinking;
+                start_thinking(ctx, Duration::from_millis(10));
             }
-            ChopstickState::ChopstickUnAvailable => {
-                if self.left_taken {
-                    self.left
-                        .clone()
-                        .do_send(ChopstickAction::Put(ctx.address()));
-                    self.left_taken = false;
-                    println!("{:} dropped left chopstick", self.name);
-                } else if self.right_taken {
-                    self.right
-                        .clone()
-                        .do_send(ChopstickAction::Put(ctx.address()));
-                    self.right_taken = false;
-                    println!("{:} dropped right chopstick", self.name);
-                }
-                ctx.address().do_send(Action::Think);
-            }
+            _ => {}
         }
     }
 }
@@ -127,10 +149,9 @@ impl Chopstick {
 
 #[derive(Message)]
 #[rtype(result = "()")]
-#[derive(Debug)]
 enum ChopstickAction {
     Take(Addr<Philosopher>, ChopstickPosition),
-    Put(Addr<Philosopher>),
+    Put,
 }
 
 impl Actor for Chopstick {
@@ -144,17 +165,30 @@ impl Handler<ChopstickAction> for Chopstick {
             ChopstickAction::Take(addr, position) => {
                 if !self.is_busy {
                     addr.do_send(ChopstickState::ChopstickAvailable(position));
+                    self.is_busy = true;
                 } else {
-                    addr.do_send(ChopstickState::ChopstickUnAvailable)
+                    addr.do_send(ChopstickState::ChopstickUnAvailable(position))
                 }
             }
-            ChopstickAction::Put(_) => self.is_busy = false,
+            ChopstickAction::Put => self.is_busy = false,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum ChopstickPosition {
     Left,
     Right,
+}
+
+fn start_thinking(ctx: &mut Context<Philosopher>, duration: Duration) {
+    ctx.notify_later(Action::Eat, duration);
+}
+
+fn start_eating(ctx: &mut Context<Philosopher>, duration: Duration) {
+    ctx.notify_later(Action::Think, duration);
+}
+
+fn chopstick_command(chopstick: Address, action: ChopstickAction) {
+    chopstick.do_send(action);
 }
