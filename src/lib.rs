@@ -1,5 +1,4 @@
 use actix::prelude::*;
-use actix::Actor;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -9,8 +8,8 @@ type Address = Arc<Addr<Chopstick>>;
 pub struct Philosopher {
     pub name: String,
     pub state: String,
-    pub left: Option<Address>,
-    pub right: Option<Address>,
+    pub left: Address,
+    pub right: Address,
     left_taken: bool,
     right_taken: bool,
 }
@@ -20,8 +19,8 @@ impl Philosopher {
         Philosopher {
             name: name.to_string(),
             state: String::from("Thinking"),
-            left: Some(left),
-            right: Some(right),
+            left: left,
+            right: right,
             left_taken: false,
             right_taken: false,
         }
@@ -55,11 +54,9 @@ impl Handler<Action> for Philosopher {
                     println!("{} has finished eating", self.name);
                     self.left
                         .clone()
-                        .unwrap()
                         .do_send(ChopstickAction::Put(ctx.address()));
                     self.right
                         .clone()
-                        .unwrap()
                         .do_send(ChopstickAction::Put(ctx.address()));
                     self.left_taken = false;
                     self.right_taken = false;
@@ -70,11 +67,11 @@ impl Handler<Action> for Philosopher {
                 println!("{} is thinking", self.name);
                 thread::sleep(Duration::from_secs(5));
                 println!("{} has finished thinking", self.name);
-                self.left.clone().unwrap().do_send(ChopstickAction::Take(
+                self.left.clone().do_send(ChopstickAction::Take(
                     ctx.address(),
                     ChopstickPosition::Left,
                 ));
-                self.left.clone().unwrap().do_send(ChopstickAction::Take(
+                self.left.clone().do_send(ChopstickAction::Take(
                     ctx.address(),
                     ChopstickPosition::Right,
                 ))
@@ -102,14 +99,12 @@ impl Handler<ChopstickState> for Philosopher {
                 if self.left_taken {
                     self.left
                         .clone()
-                        .unwrap()
                         .do_send(ChopstickAction::Put(ctx.address()));
                     self.left_taken = false;
                     println!("{:} dropped left chopstick", self.name);
                 } else if self.right_taken {
                     self.right
                         .clone()
-                        .unwrap()
                         .do_send(ChopstickAction::Put(ctx.address()));
                     self.right_taken = false;
                     println!("{:} dropped right chopstick", self.name);
